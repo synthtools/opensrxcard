@@ -1,0 +1,11 @@
+﻿Designator,Footprint,Quantity,Value,LCSC Part #
+C1,CP_EIA-3216-12_Kemet-S_Pad1.58x1.35mm_HandSolder,1,Tantalum J104 0.1uF,
+J1,PinHeader_1x08_P2.54mm_Vertical,1,Power,
+J2,PinHeader_1x10_P2.54mm_Vertical,1,PWM,
+"J3, J5",PinHeader_1x08_P2.54mm_Vertical,2,Analog,
+J4,PinHeader_1x08_P2.54mm_Vertical,1,PWM,
+J6,PinHeader_1x08_P2.54mm_Vertical,1,Communication,
+J7,PinHeader_2x18_P2.54mm_Vertical,1,Digital,
+J8,JAE_TX25-80P-6ST-H1E,1,TX25-80P-6ST-H1E,
+J9,PinHeader_2x02_P2.54mm_Vertical,1,Secondary Programming Connector,
+"SW1, SW2, SW3",SW_PUSH_6mm,3,SW_Push,
