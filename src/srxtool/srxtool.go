@@ -116,6 +116,7 @@ func programAll(firstIcOnly *bool, port serial.Port, inputFilename *string) {
 		displayProgressBar(i, wordsPerIc, startTime)
 
 		port.Write(data[i:end])
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	endTime := time.Now()
@@ -225,7 +226,7 @@ func dumpAll(firstIcOnly *bool, port serial.Port, separateIcDumps *bool, outputF
 
 			// Calculate the CRC32 checksum
 			checksum := hash.Sum32()
-			fmt.Printf("CRC32 Checksum of %s: 0x%08x\n", filename, checksum)
+			fmt.Printf("CRC32 Checksum of %s: 0x%08X\n", filename, checksum)
 			err = file.Close()
 			if err != nil {
 				log.Fatalf("Error closing file: %v", err)
@@ -250,7 +251,7 @@ func dumpAll(firstIcOnly *bool, port serial.Port, separateIcDumps *bool, outputF
 
 		// Calculate the CRC32 checksum
 		checksum := hash.Sum32()
-		fmt.Printf("CRC32 Checksum of %s: 0x%08x\n", filename_all, checksum)
+		fmt.Printf("CRC32 Checksum of %s: 0x%08X\n", filename_all, checksum)
 		err = file.Close()
 		if err != nil {
 			log.Fatalf("Error closing file: %v", err)
@@ -361,8 +362,6 @@ func crc32(port serial.Port, ic *int) {
 		log.Fatalf("Error sending command: %v", err)
 	}
 
-	println("Calculating CRC32 checksum. This will take quite a while...")
-
 	buffer := make([]byte, 128) // Buffer for incoming data
 	var incomingData string     // To hold data read from port
 	for {
@@ -384,8 +383,6 @@ func crc32(port serial.Port, ic *int) {
 			break // Exit the loop
 		}
 	}
-	println("Done.")
-
 }
 
 // -----------------------------------------------------------------------------------------
