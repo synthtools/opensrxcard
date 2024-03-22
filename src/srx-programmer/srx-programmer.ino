@@ -343,8 +343,10 @@ uint16_t read_data(uint32_t address) {
 uint16_t write_data(uint32_t address, uint16_t data, int ic_no) {
   if (ic_no == 0) {
     digitalWrite(IC1_WE_n, HIGH);
+    delayMicroseconds(1);
   } else {
     digitalWrite(IC2_WE_n, HIGH);
+    delayMicroseconds(1);
   }
 
   digitalWrite(FLASH_A00, (address >> 0) & 1);
@@ -473,6 +475,199 @@ void print_dump(uint32_t startAddress, uint32_t endAddress) {
     uint16_t data = read_data(address);
     SerialUSB.write((const uint8_t *)&data, sizeof(data));
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
+void read_data_polling_register_erase(uint32_t address) {
+  configure_datapins_read();
+  delayMicroseconds(100);
+  digitalWrite(FLASH_OE_n, LOW);
+  delayMicroseconds(100);
+
+  do {
+      uint16_t currentValue = read_data(address);
+      uint16_t dq07 = (currentValue >> 7) & 1;
+      uint16_t dq06 = (currentValue >> 6) & 1;
+      uint16_t dq05 = (currentValue >> 5) & 1;
+      uint16_t dq03 = (currentValue >> 3) & 1;
+      uint16_t dq02 = (currentValue >> 2) & 1;
+      uint16_t dq01 = (currentValue >> 1) & 1;
+/*
+      SerialUSB.print("dq07: ");
+      SerialUSB.print(dq07);
+      SerialUSB.print(" / dq06: ");
+      SerialUSB.print(dq06);
+      SerialUSB.print(" / dq05: ");
+      SerialUSB.print(dq05);
+      SerialUSB.print(" / dq03: ");
+      SerialUSB.print(dq03);
+      SerialUSB.print(" / dq02: ");
+      SerialUSB.print(dq02);
+      SerialUSB.print(" / dq01: ");
+      SerialUSB.println(dq01);
+      
+      delay(10);
+*/
+      if (dq07 == 0) { // erase still in progress
+        continue;
+      }
+
+      if (dq07 == 1) { // erase completed
+        break;
+      }
+
+  } while (true);
+
+  digitalWrite(FLASH_OE_n, HIGH);
+  delayMicroseconds(100);
+  digitalWrite(FLASH_IC1_CE_n, HIGH);
+  delayMicroseconds(100);
+  digitalWrite(FLASH_IC2_CE_n, HIGH);
+  delayMicroseconds(100);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
+void flash_reset() {
+  digitalWrite(FLASH_RST_n, HIGH);
+  delayMicroseconds(100);
+  digitalWrite(FLASH_RST_n, LOW);
+  delayMicroseconds(100);
+  digitalWrite(FLASH_RST_n, HIGH);
+  delayMicroseconds(100);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
+void chiperase(int ic_no) {
+      configure_datapins_write();
+      digitalWrite(FLASH_RST_n, HIGH);
+      delayMicroseconds(100);
+      digitalWrite(FLASH_RST_n, LOW);
+      delayMicroseconds(100);
+      digitalWrite(FLASH_RST_n, HIGH);
+      delayMicroseconds(100);
+      digitalWrite(FLASH_WP_n, HIGH);
+      delayMicroseconds(100);
+
+      digitalWrite(FLASH_OE_n, HIGH);
+      delayMicroseconds(100);
+      if (ic_no == 0) {
+        digitalWrite(FLASH_IC1_CE_n, LOW);
+        delayMicroseconds(100);
+        digitalWrite(FLASH_IC2_CE_n, HIGH);
+        delayMicroseconds(100);
+      } else {
+        digitalWrite(FLASH_IC1_CE_n, HIGH);
+        delayMicroseconds(100);
+        digitalWrite(FLASH_IC2_CE_n, LOW);
+        delayMicroseconds(100);
+      }
+
+      // chiperase
+      write_data(0x555, 0xaa, ic_no);
+      write_data(0x2aa, 0x55, ic_no);
+      write_data(0x555, 0x80, ic_no);
+      write_data(0x555, 0xaa, ic_no);
+      write_data(0x2aa, 0x55, ic_no);
+      write_data(0x555, 0x10, ic_no);
+
+      read_data_polling_register_erase(0);
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
+
+bool blank_check(uint32_t block, int ic_no) { // returns true if success, false if failure
+    configure_datapins_write();
+    digitalWrite(FLASH_RST_n, HIGH);
+    delayMicroseconds(100);
+    digitalWrite(FLASH_WP_n, HIGH);
+    delayMicroseconds(100);
+    digitalWrite(FLASH_OE_n, HIGH);
+    delayMicroseconds(100);
+
+    if (ic_no == 0) {
+      digitalWrite(FLASH_IC1_CE_n, LOW);
+      delayMicroseconds(100);
+      digitalWrite(FLASH_IC2_CE_n, HIGH);
+      delayMicroseconds(100);
+    } else {
+      digitalWrite(FLASH_IC1_CE_n, HIGH);
+      delayMicroseconds(100);
+      digitalWrite(FLASH_IC2_CE_n, LOW);
+      delayMicroseconds(100);
+    }
+
+    write_data(0x555, 0xaa, ic_no);
+    write_data(0x2aa, 0x55, ic_no);
+    write_data(block<<16, 0xeb, ic_no);
+    write_data(block<<16, 0x76, ic_no);
+    write_data(block<<16, 0x00, ic_no);
+    write_data(block<<16, 0x00, ic_no);
+    write_data(block<<16, 0x29, ic_no);
+
+    configure_datapins_read();
+    digitalWrite(FLASH_OE_n, LOW);
+    delayMicroseconds(100);
+
+    bool blankcheck_status = true;
+
+    uint16_t dq07, dq06, dq05, dq01;
+    uint16_t previousValue = read_data(block<<16);
+    uint16_t previousDq06 = (previousValue >> 6) & 1;
+    bool processSuccess = true;
+    do {
+        uint16_t currentValue = read_data(block<<16);
+        dq07 = (currentValue >> 7) & 1;
+        dq06 = (currentValue >> 6) & 1;
+        dq05 = (currentValue >> 5) & 1;
+        dq01 = (currentValue >> 1) & 1;
+/*
+        SerialUSB.print("DQ07: ");
+        SerialUSB.print(dq07);
+        SerialUSB.print(" / DQ06: ");
+        SerialUSB.print(dq06);
+        SerialUSB.print(" / DQ05: ");
+        SerialUSB.println(dq05);
+*/
+        if (previousDq06 == dq06) {
+          break;
+        }
+
+        if (dq05 != 1 && dq01 != 1) {
+          continue;
+        }
+
+        previousValue = read_data(block<<16);
+        previousDq06 = (previousValue >> 6) & 1;
+        currentValue = read_data(block<<16);
+        dq07 = (currentValue >> 7) & 1;
+        dq06 = (currentValue >> 6) & 1;
+        dq05 = (currentValue >> 5) & 1;
+        dq01 = (currentValue >> 1) & 1;
+
+        if (previousDq06 != dq06)
+          processSuccess = false;
+
+        break;
+    } while (true);
+
+//    SerialUSB.print("processSuccess: ");
+//    SerialUSB.println(processSuccess);
+
+    if (dq05 == 1)
+      blankcheck_status = false;
+
+    digitalWrite(FLASH_IC1_CE_n, HIGH);
+    delayMicroseconds(100);
+    digitalWrite(FLASH_IC2_CE_n, HIGH);
+    delayMicroseconds(100);
+    digitalWrite(FLASH_OE_n, HIGH);
+    delayMicroseconds(100);
+
+    return blankcheck_status;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -705,61 +900,25 @@ void loop() {
       SerialUSB.println(crc32, HEX);
       SerialUSB.print("done");
     } else if (inputString.startsWith("er all")) {
-      configure_datapins_write();
-      digitalWrite(FLASH_OE_n, HIGH);
-      delayMicroseconds(100);
-      digitalWrite(FLASH_RST_n, HIGH);
-      delayMicroseconds(100);
-      digitalWrite(FLASH_WP_n, HIGH);
-      delayMicroseconds(100);
-
-      digitalWrite(FLASH_IC1_CE_n, LOW);
-      delayMicroseconds(100);
-      digitalWrite(FLASH_IC2_CE_n, HIGH);
-      delayMicroseconds(100);
-
-      write_data(0x555, 0xaa, 0);
-      write_data(0x2aa, 0x55, 0);
-      write_data(0x555, 0x80, 0);
-      write_data(0x555, 0xaa, 0);
-      write_data(0x2aa, 0x55, 0);
-      write_data(0x555, 0x10, 0);
-
-      delay(5000);
-
-      delayMicroseconds(100);
-      digitalWrite(FLASH_IC1_CE_n, HIGH);
-      delayMicroseconds(100);
-      digitalWrite(FLASH_IC2_CE_n, LOW);
-      delayMicroseconds(100);
-
-      write_data(0x555, 0xaa, 1);
-      write_data(0x2aa, 0x55, 1);
-      write_data(0x555, 0x80, 1);
-      write_data(0x555, 0xaa, 1);
-      write_data(0x2aa, 0x55, 1);
-      write_data(0x555, 0x10, 1);
-
-      delay(5000);
-
-      delayMicroseconds(100);
-      digitalWrite(FLASH_IC1_CE_n, HIGH);
-      delayMicroseconds(100);
-      digitalWrite(FLASH_IC2_CE_n, HIGH);
-      delayMicroseconds(100);
+      chiperase(0);
+      chiperase(1);
+/*      
       digitalWrite(FLASH_RST_n, LOW);
       delayMicroseconds(100);
       digitalWrite(FLASH_RST_n, HIGH);
       delayMicroseconds(100);
+*/
 
       SerialUSB.println("done");
     } else if (inputString.startsWith("wr1 all")) {
+      SerialUSB.setTimeout(5000); 
+
       configure_datapins_write();
-      digitalWrite(FLASH_OE_n, HIGH);
-      delayMicroseconds(100);
       digitalWrite(FLASH_IC1_CE_n, LOW);
       delayMicroseconds(100);
       digitalWrite(FLASH_IC2_CE_n, HIGH);
+      delayMicroseconds(100);
+      digitalWrite(FLASH_OE_n, HIGH);
       delayMicroseconds(100);
       digitalWrite(FLASH_RST_n, HIGH);
       delayMicroseconds(100);
@@ -774,6 +933,9 @@ void loop() {
 
       int address_counter = 0;
       //SerialUSB.println('R');
+
+      while (!SerialUSB.available()) {}
+
       while (address_counter < words_per_ic) {
         SerialUSB.readBytes(data_buffer, BLOCK_SIZE);
         for (int i=0; i < BLOCK_SIZE; i+=2) {
@@ -794,12 +956,14 @@ void loop() {
       digitalWrite(FLASH_IC2_CE_n, HIGH);
       delayMicroseconds(100);
     } else if (inputString.startsWith("wr all")) {
+      SerialUSB.setTimeout(5000); 
+
       configure_datapins_write();
-      digitalWrite(FLASH_OE_n, HIGH);
-      delayMicroseconds(100);
       digitalWrite(FLASH_IC1_CE_n, LOW);
       delayMicroseconds(100);
       digitalWrite(FLASH_IC2_CE_n, HIGH);
+      delayMicroseconds(100);
+      digitalWrite(FLASH_OE_n, HIGH);
       delayMicroseconds(100);
       digitalWrite(FLASH_RST_n, HIGH);
       delayMicroseconds(100);
@@ -813,6 +977,9 @@ void loop() {
 
       int address_counter = 0;
       //SerialUSB.println('R');
+
+      while (!SerialUSB.available()) {}
+
       while (address_counter < words_per_ic) {
         SerialUSB.readBytes(data_buffer, BLOCK_SIZE);
         for (int i=0; i < BLOCK_SIZE; i+=2) {
@@ -837,6 +1004,9 @@ void loop() {
 
       address_counter = 0;
       //SerialUSB.println('R');
+
+      while (!SerialUSB.available()) {}
+
       while (address_counter < words_per_ic) {
         SerialUSB.readBytes(data_buffer, 512);
         for (int i=0; i < 512; i+=2) {
@@ -856,7 +1026,57 @@ void loop() {
       delayMicroseconds(100);
       digitalWrite(FLASH_IC2_CE_n, HIGH);
       delayMicroseconds(100);
-    }
+    } else if (inputString.startsWith("bc all")) {
+        bool result = true;
+
+        for (int i=0; i < 127; i++) {
+//          SerialUSB.print("block ");
+//          SerialUSB.println(i);
+          result = blank_check(i, 0);
+//          SerialUSB.print("  blankcheck: ");
+//          SerialUSB.println(result);
+
+          if (result == false) {
+            SerialUSB.print("block ");
+            SerialUSB.print(i);
+            SerialUSB.print(" (0x");
+            SerialUSB.print(pad_str(i<<16,7));  //,HEX);
+            SerialUSB.print(" - 0x");
+            SerialUSB.print(pad_str((i<<16) + 0xFFFF,7));  //,HEX);
+            SerialUSB.print(") ");
+            SerialUSB.println("is not blank!");
+          }
+          
+        }
+
+        for (int i=0; i < 127; i++) {
+//          SerialUSB.print("block ");
+//          SerialUSB.println(i);
+          result = blank_check(i, 1);
+//          SerialUSB.print("  blankcheck: ");
+//          SerialUSB.println(result);
+
+          if (result == false) {
+            SerialUSB.print("block ");
+            SerialUSB.print(i);
+            SerialUSB.print(" (0x");
+            SerialUSB.print(pad_str(i<<16,7));  //,HEX);
+            SerialUSB.print(" - 0x");
+            SerialUSB.print(pad_str((i<<16) + 0xFFFF,7));  //,HEX);
+            SerialUSB.print(") ");
+            SerialUSB.println("is not blank!");
+          }          
+        }
+
+        SerialUSB.println("done");
+        delayMicroseconds(100);
+        digitalWrite(FLASH_IC1_CE_n, HIGH);
+        delayMicroseconds(100);
+        digitalWrite(FLASH_IC2_CE_n, HIGH);
+        delayMicroseconds(100);
+
+        flash_reset();
+      }
 
     // clear the string for new input:
     inputString = "";

@@ -72,21 +72,9 @@ func programAll(firstIcOnly *bool, port serial.Port, inputFilename *string) {
 		fmt.Println("Error reading file: ", err)
 		os.Exit(1)
 	}
-	/*
-		file, err := os.Open(*inputFilename)
-		if err != nil {
-			log.Fatalf("Failed to open file: %v", err)
-		}
-		defer file.Close()
-	*/
+
 	startTime := time.Now()
-	/*
-		_, err = port.Write([]byte("er all\n"))
-		if err != nil {
-			log.Fatalf("Error sending command: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-	*/
+
 	writeCommand := "wr all\n"
 
 	if *firstIcOnly {
@@ -95,18 +83,15 @@ func programAll(firstIcOnly *bool, port serial.Port, inputFilename *string) {
 	_, err = port.Write([]byte(writeCommand))
 	if err != nil {
 		log.Fatalf("Error sending command: %v", err)
+		return
 	}
 
 	var wordsPerIc int = 8388608 * 4
 
 	if *firstIcOnly {
 		wordsPerIc = 8388608 * 2
-		//wordsPerIc = 1024
 	}
 
-	//	buf := make([]byte, 2) // Buffer for reading 2 bytes at a time
-
-	//waitForReadySignal(port)
 	for i := 0; i < wordsPerIc; i += 512 {
 		//waitForReadySignal(port)
 		end := i + 512
@@ -114,9 +99,14 @@ func programAll(firstIcOnly *bool, port serial.Port, inputFilename *string) {
 			end = len(data)
 		}
 		displayProgressBar(i, wordsPerIc, startTime)
+		//		checksum := hashcrc32.ChecksumIEEE(data[i:end])
 
 		port.Write(data[i:end])
-		time.Sleep(100 * time.Millisecond)
+
+		//		checksumBytes := make([]byte, 4)
+		//		binary.LittleEndian.PutUint32(checksumBytes, checksum)
+		//		port.Write(checksumBytes)
+		//		time.Sleep(100 * time.Millisecond)
 	}
 
 	endTime := time.Now()
