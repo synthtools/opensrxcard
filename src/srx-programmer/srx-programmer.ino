@@ -204,11 +204,11 @@ void setup() {
   delay(10);
   digitalWrite(FLASH_RST_n, HIGH);
 
+  Serial.begin(BAUD_RATE);
   SerialUSB.begin(BAUD_RATE);
 
   while (!SerialUSB) {
   }
-//  SerialUSB.println("Welcome to the SRX programmer!");
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -340,6 +340,53 @@ uint16_t read_data(uint32_t address) {
 
 // ---------------------------------------------------------------------------------------------------------
 
+uint16_t read_data_same_address() {
+  digitalWrite(FLASH_OE_n, LOW);
+  delayMicroseconds(1);
+
+  uint16_t data = 0;
+
+  data |= digitalRead(FLASH_DQ00) << 0;
+  data |= digitalRead(FLASH_DQ01) << 1;
+  data |= digitalRead(FLASH_DQ02) << 2;
+  data |= digitalRead(FLASH_DQ03) << 3;
+  data |= digitalRead(FLASH_DQ04) << 4;
+  data |= digitalRead(FLASH_DQ05) << 5;
+  data |= digitalRead(FLASH_DQ06) << 6;
+  data |= digitalRead(FLASH_DQ07) << 7;
+  data |= digitalRead(FLASH_DQ08) << 8;
+  data |= digitalRead(FLASH_DQ09) << 9;
+  data |= digitalRead(FLASH_DQ10) << 10;
+  data |= digitalRead(FLASH_DQ11) << 11;
+  data |= digitalRead(FLASH_DQ12) << 12;
+  data |= digitalRead(FLASH_DQ13) << 13;
+  data |= digitalRead(FLASH_DQ14) << 14;
+  data |= digitalRead(FLASH_DQ15) << 15;
+
+  digitalWrite(FLASH_OE_n, HIGH);
+  delayMicroseconds(1);
+
+  return data;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
+bool read_data_same_address_dq07() {
+  digitalWrite(FLASH_OE_n, LOW);
+  delayMicroseconds(1);
+
+  bool data = false;
+
+  data = (bool) digitalRead(FLASH_DQ07) << 7;
+
+  digitalWrite(FLASH_OE_n, HIGH);
+  delayMicroseconds(1);
+
+  return data;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
 uint16_t write_data(uint32_t address, uint16_t data, int ic_no) {
   if (ic_no == 0) {
     digitalWrite(IC1_WE_n, HIGH);
@@ -429,13 +476,16 @@ void print_hex_dump(uint32_t startAddress, uint32_t endAddress) {
 
     String asciiRepresentation = "";
 
+    uint16_t data = 0;
+    char lsb, msb;
+
     // Iterate over each byte in the line
     for (int i = 0; i < bytesPerLine; ++i) {
       // Read data from flash memory
-      uint16_t data = read_data(address + i);
+      data = read_data(address + i);
 
-      char lsb = (char)(data & 0xFF);
-      char msb = (char)((data >> 8) & 0xFF);
+      lsb = (char)(data & 0xFF);
+      msb = (char)((data >> 8) & 0xFF);
 
       crc32 = updateCRC32((uint8_t)lsb, crc32);
       crc32 = updateCRC32((uint8_t)msb, crc32);
@@ -465,7 +515,7 @@ void print_hex_dump(uint32_t startAddress, uint32_t endAddress) {
   SerialUSB.print("\n");
   String crcStr = pad_str(~crc32, 8);
 
-  SerialUSB.println("CRC-32 CHECKSUM FOR DUMP BLOCK 0x" + String(startAddress, HEX) + " to 0x" + String(endAddress, HEX) + " IS: 0x" + String(crcStr));
+  SerialUSB.println("CRC32 CHECKSUM FOR DUMP BLOCK 0x" + String(startAddress, HEX) + " to 0x" + String(endAddress, HEX) + " IS: 0x" + String(crcStr));
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -475,6 +525,32 @@ void print_dump(uint32_t startAddress, uint32_t endAddress) {
     uint16_t data = read_data(address);
     SerialUSB.write((const uint8_t *)&data, sizeof(data));
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
+void read_data_polling_register_program(uint32_t address, bool written_dq07) {
+  configure_datapins_read();
+  delayMicroseconds(1);
+  digitalWrite(FLASH_OE_n, LOW);
+  delayMicroseconds(1);
+
+  do {
+      bool dq07 = read_data_same_address_dq07();
+//      Serial.print("  poll dq07: ");
+//      Serial.println(dq07);
+      
+      if (dq07 == written_dq07) { // if dq07 is the written_dq07, writing is done, we can proceed
+//        Serial.println("    match, next byte");
+        break;
+      }
+      // otherwise it's the complement and we need to wait some more
+//      Serial.println("    complement, repeat");
+  } while (true);
+
+  digitalWrite(FLASH_OE_n, HIGH);
+  delayMicroseconds(1);
+  configure_datapins_write();
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -670,15 +746,61 @@ bool blank_check(uint32_t block, int ic_no) { // returns true if success, false 
     return blankcheck_status;
 }
 
+void buffered_program_received_data(int ic_no) {
+      static uint8_t data_buffer[BLOCK_SIZE];
+      static uint32_t words_per_ic = 8388608;
+      uint16_t word = 0;
+      uint32_t address_counter = 0;
+
+      // unlock bypass
+      write_data(0x555, 0xaa, ic_no);
+      write_data(0x2aa, 0x55, ic_no);
+      write_data(0x555, 0x20, ic_no);
+
+      while (!SerialUSB.available()) {}
+
+      address_counter = 0;
+      //SerialUSB.println('R');
+      while (address_counter < words_per_ic) {
+        SerialUSB.readBytes(data_buffer, BLOCK_SIZE);
+
+        // unlock bypass write to buffer program
+        write_data(address_counter, 0x25, ic_no);
+        write_data(address_counter, (BLOCK_SIZE/2)-1, ic_no);
+
+        for (int i=0; i < BLOCK_SIZE; i+=2) {
+          word = 0;
+          word = data_buffer[i];
+          word |= data_buffer[i+1] << 8;
+
+          write_data(address_counter, word, ic_no);
+          address_counter++;
+        }
+        // write to buffer confirm
+        write_data(address_counter-1, 0x29, ic_no);
+
+//        Serial.print("dq07: ");
+//        Serial.println((word >> 7 )&1);
+
+        read_data_polling_register_program(address_counter-1, (word >> 7 )&1);
+      }
+      
+      // reset unlock bypass
+      write_data(0, 0x90, ic_no);
+      write_data(0, 0x00, ic_no);
+}
+
 // ---------------------------------------------------------------------------------------------------------
 
 uint32_t calc_crc32(uint32_t startAddress, uint32_t endAddress, uint32_t crc32) {
   int last_progress_value = -1;
+  uint16_t data = 0;
+  char lsb, msb;
   for (uint32_t address = startAddress; address < endAddress; address++) {
     last_progress_value = display_progress_bar(address - startAddress, endAddress - startAddress, last_progress_value);
-    uint16_t data = read_data(address);
-    char lsb = (char)(data & 0xFF);
-    char msb = (char)((data >> 8) & 0xFF);
+    data = read_data(address);
+    lsb = (char)(data & 0xFF);
+    msb = (char)((data >> 8) & 0xFF);
 
     crc32 = updateCRC32((uint8_t)lsb, crc32);
     crc32 = updateCRC32((uint8_t)msb, crc32);
@@ -902,22 +1024,17 @@ void loop() {
     } else if (inputString.startsWith("er all")) {
       chiperase(0);
       chiperase(1);
-/*      
+
       digitalWrite(FLASH_RST_n, LOW);
       delayMicroseconds(100);
       digitalWrite(FLASH_RST_n, HIGH);
       delayMicroseconds(100);
-*/
 
       SerialUSB.println("done");
     } else if (inputString.startsWith("wr1 all")) {
-      SerialUSB.setTimeout(5000); 
+      SerialUSB.setTimeout(25000); 
 
       configure_datapins_write();
-      digitalWrite(FLASH_IC1_CE_n, LOW);
-      delayMicroseconds(100);
-      digitalWrite(FLASH_IC2_CE_n, HIGH);
-      delayMicroseconds(100);
       digitalWrite(FLASH_OE_n, HIGH);
       delayMicroseconds(100);
       digitalWrite(FLASH_RST_n, HIGH);
@@ -925,44 +1042,21 @@ void loop() {
       digitalWrite(FLASH_WP_n, HIGH);
       delayMicroseconds(100);
 
-      uint32_t words_per_ic = 8388608;
-//      uint32_t words_per_ic = 512;
-      uint16_t word = 0;
+      digitalWrite(FLASH_IC1_CE_n, LOW);
+      delayMicroseconds(100);
+      digitalWrite(FLASH_IC2_CE_n, HIGH);
+      delayMicroseconds(100);
 
-      static uint8_t data_buffer[BLOCK_SIZE];
-
-      int address_counter = 0;
-      //SerialUSB.println('R');
-
-      while (!SerialUSB.available()) {}
-
-      while (address_counter < words_per_ic) {
-        SerialUSB.readBytes(data_buffer, BLOCK_SIZE);
-        for (int i=0; i < BLOCK_SIZE; i+=2) {
-          word = 0;
-          word = data_buffer[i];
-          word |= data_buffer[i+1] << 8;
-          write_data(0x555, 0xaa, 0);
-          write_data(0x2aa, 0x55, 0);
-          write_data(0x555, 0xa0, 0);
-          write_data(address_counter, word, 0);
-          address_counter++;
-        }
-        //SerialUSB.println('R');
-      }
+      buffered_program_received_data(0);
 
       digitalWrite(FLASH_IC1_CE_n, HIGH);
       delayMicroseconds(100);
       digitalWrite(FLASH_IC2_CE_n, HIGH);
       delayMicroseconds(100);
     } else if (inputString.startsWith("wr all")) {
-      SerialUSB.setTimeout(5000); 
+      SerialUSB.setTimeout(25000); 
 
       configure_datapins_write();
-      digitalWrite(FLASH_IC1_CE_n, LOW);
-      delayMicroseconds(100);
-      digitalWrite(FLASH_IC2_CE_n, HIGH);
-      delayMicroseconds(100);
       digitalWrite(FLASH_OE_n, HIGH);
       delayMicroseconds(100);
       digitalWrite(FLASH_RST_n, HIGH);
@@ -970,57 +1064,21 @@ void loop() {
       digitalWrite(FLASH_WP_n, HIGH);
       delayMicroseconds(100);
 
-      uint32_t words_per_ic = 8388608;
-      uint16_t word = 0;
+      digitalWrite(FLASH_IC1_CE_n, LOW);
+      delayMicroseconds(100);
+      digitalWrite(FLASH_IC2_CE_n, HIGH);
+      delayMicroseconds(100);
 
-      static uint8_t data_buffer[BLOCK_SIZE];
+      buffered_program_received_data(0);
 
-      int address_counter = 0;
-      //SerialUSB.println('R');
-
-      while (!SerialUSB.available()) {}
-
-      while (address_counter < words_per_ic) {
-        SerialUSB.readBytes(data_buffer, BLOCK_SIZE);
-        for (int i=0; i < BLOCK_SIZE; i+=2) {
-          word = 0;
-          word = data_buffer[i];
-          word |= data_buffer[i+1] << 8;
-          write_data(0x555, 0xaa, 0);
-          write_data(0x2aa, 0x55, 0);
-          write_data(0x555, 0xa0, 0);
-          write_data(address_counter, word, 0);
-          address_counter++;
-        }
-        //SerialUSB.println('R');
-      }
-
-      delay(2000);
+      delay(100);
 
       digitalWrite(FLASH_IC1_CE_n, HIGH);
       delayMicroseconds(100);
       digitalWrite(FLASH_IC2_CE_n, LOW);
       delayMicroseconds(100);
 
-      address_counter = 0;
-      //SerialUSB.println('R');
-
-      while (!SerialUSB.available()) {}
-
-      while (address_counter < words_per_ic) {
-        SerialUSB.readBytes(data_buffer, 512);
-        for (int i=0; i < 512; i+=2) {
-          word = 0;
-          word = data_buffer[i];
-          word |= data_buffer[i+1] << 8;
-          write_data(0x555, 0xaa, 1);
-          write_data(0x2aa, 0x55, 1);
-          write_data(0x555, 0xa0, 1);
-          write_data(address_counter, word, 1);
-          address_counter++;
-        }
-        //SerialUSB.println('R');
-      }
+      buffered_program_received_data(1);
 
       digitalWrite(FLASH_IC1_CE_n, HIGH);
       delayMicroseconds(100);
